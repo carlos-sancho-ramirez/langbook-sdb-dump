@@ -1,6 +1,10 @@
 use std::env;
 
-fn main() {
+struct Params {
+    input_file_name: String
+}
+
+fn obtain_params() -> Result<Params, String> {
     let mut next_is_input = false;
     let mut input_file_name: Option<String> = None;
     let mut is_first = true;
@@ -17,16 +21,32 @@ fn main() {
                 next_is_input = true
             }
             else {
-                panic!("Input file already set");
+                return Err(String::from("Input file already set"));
             }
         }
         else {
-            panic!("Invalid argument {}", arg);
+            let mut s = String::from("Invalid argument ");
+            s.push_str(&arg);
+            return Err(s);
         }
     }
 
     match input_file_name {
-        Some(name) => println!("Reading file {}", name),
-        None => panic!("Missing input file: try {} -i <sdb-file>", env::args().next().expect("wtf?"))
+        Some(name) => Ok(Params {
+            input_file_name: name
+        }),
+        None => {
+            let mut s = String::from("Missing input file: try ");
+            s.push_str(&env::args().next().expect("wtf?"));
+            s.push_str(" -i <sdb-file>");
+            Err(s)
+        }
+    }
+}
+
+fn main() {
+    match obtain_params() {
+        Err(text) => println!("{}", text),
+        Ok(params) => println!("Reading file {}", params.input_file_name)
     }
 }
