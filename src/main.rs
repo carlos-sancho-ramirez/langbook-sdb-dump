@@ -1,8 +1,10 @@
 use std::env;
 use std::fs::File;
 use std::io::Read;
+use huffman::InputBitStream;
 
 pub mod file_utils;
+pub mod huffman;
 
 struct Params {
     input_file_name: String
@@ -58,7 +60,13 @@ fn main() {
                 Ok(file) => {
                     let mut bytes = file.bytes();
                     match file_utils::assert_next_is_same_text(&mut bytes, "SDB\x01") {
-                        Ok(_) => println!("All fine so far"),
+                        Ok(_) => {
+                            println!("Displaying first bits:");
+                            let mut stream = InputBitStream::from(&mut bytes);
+                            for _ in 0..20 {
+                                println!("  {}", stream.read_boolean().expect("Unable to read boolean"))
+                            }
+                        },
                         Err(err) => println!("Error found: {}", err.message)
                     }
                 }

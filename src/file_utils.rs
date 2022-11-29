@@ -1,6 +1,7 @@
 use std::fs::File;
 use std::io::Bytes;
 
+#[derive(Debug)]
 pub struct ReadError {
     pub message: String
 }
@@ -13,7 +14,7 @@ impl ReadError {
     }
 }
 
-fn read_u8(bytes: &mut Bytes<File>) -> Result<u8, ReadError> {
+pub fn read_u8(bytes: &mut Bytes<File>) -> Result<u8, ReadError> {
     match bytes.next() {
         None => Err(ReadError::new("Unexpected end of file")),
         Some(result) => match result {
