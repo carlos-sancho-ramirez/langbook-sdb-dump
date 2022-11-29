@@ -1,6 +1,8 @@
 use std::env;
 use std::fs::File;
-use std::io::{Bytes, Read};
+use std::io::Read;
+
+pub mod file_utils;
 
 struct Params {
     input_file_name: String
@@ -46,50 +48,6 @@ fn obtain_arguments() -> Result<Params, String> {
     }
 }
 
-struct ReadError {
-    message: String
-}
-
-impl ReadError {
-    fn new(message: &str) -> ReadError {
-        ReadError {
-            message: message.to_string()
-        }
-    }
-}
-
-fn read_u8(bytes: &mut Bytes<File>) -> Result<u8, ReadError> {
-    match bytes.next() {
-        None => Err(ReadError::new("Unexpected end of file")),
-        Some(result) => match result {
-            Err(err) => Err(ReadError::new(&err.to_string())),
-            Ok(x) => Ok(x)
-        }
-    }
-}
-
-fn assert_next_is_same_u8(bytes: &mut Bytes<File>, value: u8) -> Result<bool, ReadError> {
-    match read_u8(bytes) {
-        Err(x) => Err(x),
-        Ok(x) => {
-            if x == value {
-                Ok(true)
-            }
-            else {
-                Err(ReadError::new(&format!("Unexpected character 0x{:X}, expectation was 0x{:X}", x, value)))
-            }
-        }
-    }
-}
-
-fn assert_next_is_same_text(bytes: &mut Bytes<File>, text: &str) -> Result<bool, ReadError> {
-    for expected_value in text.bytes() {
-        assert_next_is_same_u8(bytes, expected_value)?;
-    }
-
-    return Ok(true)
-}
-
 fn main() {
     match obtain_arguments() {
         Err(text) => println!("{}", text),
@@ -99,7 +57,7 @@ fn main() {
                 Err(_) => println!("Unable to open file {}", params.input_file_name),
                 Ok(file) => {
                     let mut bytes = file.bytes();
-                    match assert_next_is_same_text(&mut bytes, "SDB\x01") {
+                    match file_utils::assert_next_is_same_text(&mut bytes, "SDB\x01") {
                         Ok(_) => println!("All fine so far"),
                         Err(err) => println!("Error found: {}", err.message)
                     }
