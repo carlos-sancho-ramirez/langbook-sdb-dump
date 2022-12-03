@@ -60,15 +60,12 @@ fn main() {
                 Err(_) => println!("Unable to open file {}", params.input_file_name),
                 Ok(file) => {
                     let mut bytes = file.bytes();
-                    match file_utils::assert_next_is_same_text(&mut bytes, "SDB\x01") {
-                        Ok(_) => {
-                            let mut stream = InputBitStream::from(&mut bytes);
-                            let natural8_table = NaturalNumberHuffmanTable::create_with_alignment(8);
-                            match stream.read_symbol(&natural8_table) {
-                                Ok(symbol_array_count) => println!("Found {} symbol arrays", symbol_array_count),
-                                Err(err) => println!("Error found: {}", err.message)
-                            }
-                        },
+                    match file_utils::assert_next_is_same_text(&mut bytes, "SDB\x01").and_then(|_| {
+                        let mut stream = InputBitStream::from(&mut bytes);
+                        let natural8_table = NaturalNumberHuffmanTable::create_with_alignment(8);
+                        stream.read_symbol(&natural8_table)
+                    }) {
+                        Ok(symbol_array_count) => println!("Found {} symbol arrays", symbol_array_count),
                         Err(err) => println!("Error found: {}", err.message)
                     }
                 }
