@@ -2,6 +2,7 @@ use std::env;
 use std::fs::File;
 use std::io::Read;
 use huffman::InputBitStream;
+use huffman::NaturalNumberHuffmanTable;
 
 pub mod file_utils;
 pub mod huffman;
@@ -61,10 +62,11 @@ fn main() {
                     let mut bytes = file.bytes();
                     match file_utils::assert_next_is_same_text(&mut bytes, "SDB\x01") {
                         Ok(_) => {
-                            println!("Displaying first bits:");
                             let mut stream = InputBitStream::from(&mut bytes);
-                            for _ in 0..20 {
-                                println!("  {}", stream.read_boolean().expect("Unable to read boolean"))
+                            let natural8_table = NaturalNumberHuffmanTable::create_with_alignment(8);
+                            match stream.read_symbol(&natural8_table) {
+                                Ok(symbol_array_count) => println!("Found {} symbol arrays", symbol_array_count),
+                                Err(err) => println!("Error found: {}", err.message)
                             }
                         },
                         Err(err) => println!("Error found: {}", err.message)

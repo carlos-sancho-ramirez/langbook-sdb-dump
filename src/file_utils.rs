@@ -14,6 +14,12 @@ impl ReadError {
     }
 }
 
+impl From<&str> for ReadError {
+    fn from(message: &str) -> Self {
+        Self::new(message)
+    }
+}
+
 pub fn read_u8(bytes: &mut Bytes<File>) -> Result<u8, ReadError> {
     match bytes.next() {
         None => Err(ReadError::new("Unexpected end of file")),
