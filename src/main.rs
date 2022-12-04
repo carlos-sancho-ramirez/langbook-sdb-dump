@@ -3,6 +3,7 @@ use std::fs::File;
 use std::io::Read;
 use huffman::InputBitStream;
 use huffman::NaturalNumberHuffmanTable;
+use crate::file_utils::ReadError;
 
 pub mod file_utils;
 pub mod huffman;
@@ -51,6 +52,22 @@ fn obtain_arguments() -> Result<Params, String> {
     }
 }
 
+fn read_character(stream: &mut InputBitStream) -> Result<char, ReadError> {
+    let natural8_table = NaturalNumberHuffmanTable::create_with_alignment(8);
+    match char::from_u32(stream.read_symbol(&natural8_table)?) {
+        Some(ch) => Ok(ch),
+        None => Err(ReadError::from("Unable to convert char"))
+    }
+}
+
+fn read_diff_character(stream: &mut InputBitStream, previous: char) -> Result<char, ReadError> {
+    let natural4_table = NaturalNumberHuffmanTable::create_with_alignment(4);
+    match char::from_u32(stream.read_symbol(&natural4_table)? + (previous as u32) + 1) {
+        Some(ch) => Ok(ch),
+        None => Err(ReadError::from("Unable to convert char"))
+    }
+}
+
 fn main() {
     match obtain_arguments() {
         Err(text) => println!("{}", text),
@@ -61,11 +78,14 @@ fn main() {
                 Ok(file) => {
                     let mut bytes = file.bytes();
                     match file_utils::assert_next_is_same_text(&mut bytes, "SDB\x01").and_then(|_| {
-                        let mut stream = InputBitStream::from(&mut bytes);
                         let natural8_table = NaturalNumberHuffmanTable::create_with_alignment(8);
-                        stream.read_symbol(&natural8_table)
+                        let mut stream = InputBitStream::from(&mut bytes);
+                        stream.read_symbol(&natural8_table).and_then(|symbol_array_count| {
+                            println!("Found {} symbol arrays", symbol_array_count);
+                            stream.read_table(read_character, read_diff_character)
+                        })
                     }) {
-                        Ok(symbol_array_count) => println!("Found {} symbol arrays", symbol_array_count),
+                        Ok(_) => println!("Table read"),
                         Err(err) => println!("Error found: {}", err.message)
                     }
                 }

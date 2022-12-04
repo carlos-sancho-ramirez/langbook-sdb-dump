@@ -1,3 +1,4 @@
+use std::fmt::Display;
 use std::fs::File;
 use std::io::Bytes;
 use crate::file_utils;
@@ -48,6 +49,43 @@ impl<'a> InputBitStream<'a> {
                 bits += 1;
             }
         }
+    }
+
+    pub fn read_table<S : Copy + Display>(&mut self, supplier: impl Fn(&mut Self) -> Result<S, ReadError>, diff_supplier: impl Fn(&mut Self, S) -> Result<S, ReadError>) -> Result<DefinedHuffmanTable<S>, ReadError> {
+        let mut level_lengths: Vec<u32> = Vec::new();
+        let mut max = 1;
+        while max > 0 {
+            let ranged_integer_huffman_table = RangedIntegerHuffmanTable::new(0, max);
+            let level_length = self.read_symbol(&ranged_integer_huffman_table)?;
+            level_lengths.push(level_length);
+            max -= level_length;
+            max <<= 1;
+        }
+
+        let mut level_indexes: Vec<usize> = Vec::new();
+        let mut symbols: Vec<S> = Vec::new();
+
+        for index in 0..level_lengths.len() {
+            if index > 0 {
+                level_indexes.push(symbols.len());
+            }
+
+            let level_length = level_lengths[index];
+            if level_length > 0 {
+                let mut element = supplier(self)?;
+                symbols.push(element);
+
+                for _ in 1..level_length {
+                    element = diff_supplier(self, element)?;
+                    symbols.push(element);
+                }
+            }
+        }
+
+        Ok(DefinedHuffmanTable {
+            level_indexes,
+            symbols
+        })
     }
 }
 
@@ -102,5 +140,97 @@ impl HuffmanTable<u32> for NaturalNumberHuffmanTable {
 
             Ok(base + index)
         }
+    }
+}
+
+pub struct RangedIntegerHuffmanTable {
+    min: u32,
+    max: u32,
+    max_bits: u32,
+    limit: u32
+}
+
+impl RangedIntegerHuffmanTable {
+    fn new(min: u32, max: u32) -> Self {
+        if max < min {
+            panic!("Invalid range");
+        }
+
+        let possibilities = max - min + 1;
+        let mut max_bits = 0;
+        while possibilities > (1 << max_bits) {
+            max_bits += 1;
+        }
+
+        let limit = (1 << max_bits) - possibilities;
+
+        Self {
+            min,
+            max,
+            max_bits,
+            limit
+        }
+    }
+}
+
+impl HuffmanTable<u32> for RangedIntegerHuffmanTable {
+    fn symbols_with_bits(&self, bits: u32) -> u32 {
+        if bits == self.max_bits {
+            self.max - self.min + 1 - self.limit
+        }
+        else if bits == self.max_bits - 1 {
+            self.limit
+        }
+        else {
+            0
+        }
+    }
+
+    fn get_symbol(&self, bits: u32, index: u32) -> Result<u32, &str> {
+        if bits == self.max_bits {
+            Ok(index + self.limit + self.min)
+        }
+        else if bits == self.max_bits - 1 {
+            Ok(index + self.min)
+        }
+        else {
+            Err("Invalid number of bits")
+        }
+    }
+}
+
+pub struct DefinedHuffmanTable<S> {
+    level_indexes: Vec<usize>,
+    symbols: Vec<S>
+}
+
+impl<S: Copy> HuffmanTable<S> for DefinedHuffmanTable<S> {
+    fn symbols_with_bits(&self, bits: u32) -> u32 {
+        let level_index = if bits == 0 {
+            0
+        }
+        else {
+            self.level_indexes[(bits - 1) as usize]
+        };
+
+        let next_level_index = if self.level_indexes.len() == (bits as usize) {
+            self.symbols.len()
+        }
+        else {
+            self.level_indexes[bits as usize]
+        };
+
+        (next_level_index - level_index) as u32
+    }
+
+    fn get_symbol(&self, bits: u32, index: u32) -> Result<S, &str> {
+        let offset = if bits == 0 {
+            0
+        }
+        else {
+            self.level_indexes[(bits - 1) as usize]
+        };
+
+        Ok(self.symbols[offset + (index as usize)])
     }
 }
