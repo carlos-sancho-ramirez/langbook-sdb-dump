@@ -51,7 +51,21 @@ impl<'a> InputBitStream<'a> {
         }
     }
 
-    pub fn read_table<S : Copy + Display>(&mut self, supplier: impl Fn(&mut Self) -> Result<S, ReadError>, diff_supplier: impl Fn(&mut Self, S) -> Result<S, ReadError>) -> Result<DefinedHuffmanTable<S>, ReadError> {
+    pub fn read_character<T: HuffmanTable<u32>>(&mut self, table: &T) -> Result<char, ReadError> {
+        match char::from_u32(self.read_symbol(table)?) {
+            Some(ch) => Ok(ch),
+            None => Err(ReadError::from("Unable to convert char"))
+        }
+    }
+
+    pub fn read_diff_character<T: HuffmanTable<u32>>(&mut self, table: &T, previous: char) -> Result<char, ReadError> {
+        match char::from_u32(self.read_symbol(table)? + (previous as u32) + 1) {
+            Some(ch) => Ok(ch),
+            None => Err(ReadError::from("Unable to convert char"))
+        }
+    }
+
+    pub fn read_table<S : Copy + Display, T1, T2>(&mut self, table1: &T1, table2: &T2, supplier: impl Fn(&mut Self, &T1) -> Result<S, ReadError>, diff_supplier: impl Fn(&mut Self, &T2, S) -> Result<S, ReadError>) -> Result<DefinedHuffmanTable<S>, ReadError> {
         let mut level_lengths: Vec<u32> = Vec::new();
         let mut max = 1;
         while max > 0 {
@@ -72,11 +86,11 @@ impl<'a> InputBitStream<'a> {
 
             let level_length = level_lengths[index];
             if level_length > 0 {
-                let mut element = supplier(self)?;
+                let mut element = supplier(self, &table1)?;
                 symbols.push(element);
 
                 for _ in 1..level_length {
-                    element = diff_supplier(self, element)?;
+                    element = diff_supplier(self, &table2, element)?;
                     symbols.push(element);
                 }
             }

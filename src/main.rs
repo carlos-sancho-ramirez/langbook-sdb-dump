@@ -52,19 +52,18 @@ fn obtain_arguments() -> Result<Params, String> {
     }
 }
 
-fn read_character(stream: &mut InputBitStream) -> Result<char, ReadError> {
-    let natural8_table = NaturalNumberHuffmanTable::create_with_alignment(8);
-    match char::from_u32(stream.read_symbol(&natural8_table)?) {
-        Some(ch) => Ok(ch),
-        None => Err(ReadError::from("Unable to convert char"))
-    }
+struct SdbReader<'a> {
+    stream: InputBitStream<'a>,
+    natural4_table: NaturalNumberHuffmanTable,
+    natural8_table: NaturalNumberHuffmanTable
 }
 
-fn read_diff_character(stream: &mut InputBitStream, previous: char) -> Result<char, ReadError> {
-    let natural4_table = NaturalNumberHuffmanTable::create_with_alignment(4);
-    match char::from_u32(stream.read_symbol(&natural4_table)? + (previous as u32) + 1) {
-        Some(ch) => Ok(ch),
-        None => Err(ReadError::from("Unable to convert char"))
+impl<'a> SdbReader<'a> {
+    fn read(mut self) -> Result<huffman::DefinedHuffmanTable<char>, ReadError> {
+        self.stream.read_symbol(&self.natural8_table).and_then(|symbol_array_count| {
+            println!("Found {} symbol arrays", symbol_array_count);
+            self.stream.read_table(&self.natural8_table, &self.natural4_table, InputBitStream::read_character, InputBitStream::read_diff_character)
+        })
     }
 }
 
@@ -78,12 +77,12 @@ fn main() {
                 Ok(file) => {
                     let mut bytes = file.bytes();
                     match file_utils::assert_next_is_same_text(&mut bytes, "SDB\x01").and_then(|_| {
-                        let natural8_table = NaturalNumberHuffmanTable::create_with_alignment(8);
-                        let mut stream = InputBitStream::from(&mut bytes);
-                        stream.read_symbol(&natural8_table).and_then(|symbol_array_count| {
-                            println!("Found {} symbol arrays", symbol_array_count);
-                            stream.read_table(read_character, read_diff_character)
-                        })
+                        let reader = SdbReader {
+                            stream: InputBitStream::from(&mut bytes),
+                            natural4_table: NaturalNumberHuffmanTable::create_with_alignment(4),
+                            natural8_table: NaturalNumberHuffmanTable::create_with_alignment(8)
+                        };
+                        reader.read()
                     }) {
                         Ok(_) => println!("Table read"),
                         Err(err) => println!("Error found: {}", err.message)
