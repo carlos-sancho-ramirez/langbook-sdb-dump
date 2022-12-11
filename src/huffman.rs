@@ -51,6 +51,10 @@ impl<'a> InputBitStream<'a> {
         }
     }
 
+    pub fn read_diff_u32<T: HuffmanTable<u32>>(&mut self, table: &T, previous: u32) -> Result<u32, ReadError> {
+        Ok(self.read_symbol(table)? + previous + 1)
+    }
+
     pub fn read_character<T: HuffmanTable<u32>>(&mut self, table: &T) -> Result<char, ReadError> {
         match char::from_u32(self.read_symbol(table)?) {
             Some(ch) => Ok(ch),
@@ -80,6 +84,7 @@ impl<'a> InputBitStream<'a> {
         let mut symbols: Vec<S> = Vec::new();
 
         for index in 0..level_lengths.len() {
+            println!("  Symbols for {} bits:", index);
             if index > 0 {
                 level_indexes.push(symbols.len());
             }
@@ -87,10 +92,12 @@ impl<'a> InputBitStream<'a> {
             let level_length = level_lengths[index];
             if level_length > 0 {
                 let mut element = supplier(self, &table1)?;
+                println!("    {}", element);
                 symbols.push(element);
 
                 for _ in 1..level_length {
                     element = diff_supplier(self, &table2, element)?;
+                    println!("    {}", element);
                     symbols.push(element);
                 }
             }

@@ -4,6 +4,7 @@ use std::io::Read;
 use huffman::InputBitStream;
 use huffman::NaturalNumberHuffmanTable;
 use crate::file_utils::ReadError;
+use crate::huffman::DefinedHuffmanTable;
 
 pub mod file_utils;
 pub mod huffman;
@@ -54,15 +55,30 @@ fn obtain_arguments() -> Result<Params, String> {
 
 struct SdbReader<'a> {
     stream: InputBitStream<'a>,
+    natural3_table: NaturalNumberHuffmanTable,
     natural4_table: NaturalNumberHuffmanTable,
     natural8_table: NaturalNumberHuffmanTable
 }
 
+struct SdbReadResult {
+    symbol_array_count: u32,
+    chars_table: DefinedHuffmanTable<char>,
+    symbol_arrays_length_table: DefinedHuffmanTable<u32>
+}
+
 impl<'a> SdbReader<'a> {
-    fn read(mut self) -> Result<huffman::DefinedHuffmanTable<char>, ReadError> {
-        self.stream.read_symbol(&self.natural8_table).and_then(|symbol_array_count| {
-            println!("Found {} symbol arrays", symbol_array_count);
-            self.stream.read_table(&self.natural8_table, &self.natural4_table, InputBitStream::read_character, InputBitStream::read_diff_character)
+    fn read(mut self) -> Result<SdbReadResult, ReadError> {
+        let symbol_array_count = self.stream.read_symbol(&self.natural8_table)?;
+        println!("Found {} symbol arrays", symbol_array_count);
+        println!("Characters table:");
+        let chars_table = self.stream.read_table(&self.natural8_table, &self.natural4_table, InputBitStream::read_character, InputBitStream::read_diff_character)?;
+        println!();
+        println!("Symbol arrays length table:");
+        let symbol_arrays_length_table = self.stream.read_table(&self.natural8_table, &self.natural3_table, InputBitStream::read_symbol, InputBitStream::read_diff_u32)?;
+        Ok(SdbReadResult {
+            symbol_array_count,
+            chars_table,
+            symbol_arrays_length_table
         })
     }
 }
@@ -79,6 +95,7 @@ fn main() {
                     match file_utils::assert_next_is_same_text(&mut bytes, "SDB\x01").and_then(|_| {
                         let reader = SdbReader {
                             stream: InputBitStream::from(&mut bytes),
+                            natural3_table: NaturalNumberHuffmanTable::create_with_alignment(3),
                             natural4_table: NaturalNumberHuffmanTable::create_with_alignment(4),
                             natural8_table: NaturalNumberHuffmanTable::create_with_alignment(8)
                         };
