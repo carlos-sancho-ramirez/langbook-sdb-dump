@@ -4,6 +4,7 @@ use std::io::Read;
 use huffman::InputBitStream;
 use huffman::NaturalNumberHuffmanTable;
 use crate::file_utils::ReadError;
+use crate::huffman::HuffmanTable;
 
 pub mod file_utils;
 pub mod huffman;
@@ -64,11 +65,7 @@ struct SdbReadResult {
 }
 
 impl<'a> SdbReader<'a> {
-    fn read(mut self) -> Result<SdbReadResult, ReadError> {
-        let symbol_array_count = self.stream.read_symbol(&self.natural8_table)?;
-        let chars_table = self.stream.read_table(&self.natural8_table, &self.natural4_table, InputBitStream::read_character, InputBitStream::read_diff_character)?;
-        let symbol_arrays_length_table = self.stream.read_table(&self.natural8_table, &self.natural3_table, InputBitStream::read_symbol, InputBitStream::read_diff_u32)?;
-
+    fn read_symbol_arrays(&mut self, symbol_array_count: u32, symbol_arrays_length_table: impl HuffmanTable<u32>, chars_table: impl HuffmanTable<char>) -> Result<Vec<String>, ReadError> {
         let mut symbol_arrays: Vec<String> = Vec::new();
         for _ in 0..symbol_array_count {
             let length = self.stream.read_symbol(&symbol_arrays_length_table)?;
@@ -79,6 +76,14 @@ impl<'a> SdbReader<'a> {
             symbol_arrays.push(array);
         }
 
+        Ok(symbol_arrays)
+    }
+
+    fn read(mut self) -> Result<SdbReadResult, ReadError> {
+        let symbol_array_count = self.stream.read_symbol(&self.natural8_table)?;
+        let chars_table = self.stream.read_table(&self.natural8_table, &self.natural4_table, InputBitStream::read_character, InputBitStream::read_diff_character)?;
+        let symbol_arrays_length_table = self.stream.read_table(&self.natural8_table, &self.natural3_table, InputBitStream::read_symbol, InputBitStream::read_diff_u32)?;
+        let symbol_arrays = self.read_symbol_arrays(symbol_array_count, symbol_arrays_length_table, chars_table)?;
         Ok(SdbReadResult {
             symbol_arrays
         })
