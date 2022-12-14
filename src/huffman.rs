@@ -84,7 +84,6 @@ impl<'a> InputBitStream<'a> {
         let mut symbols: Vec<S> = Vec::new();
 
         for index in 0..level_lengths.len() {
-            println!("  Symbols for {} bits:", index);
             if index > 0 {
                 level_indexes.push(symbols.len());
             }
@@ -92,12 +91,10 @@ impl<'a> InputBitStream<'a> {
             let level_length = level_lengths[index];
             if level_length > 0 {
                 let mut element = supplier(self, &table1)?;
-                println!("    {}", element);
                 symbols.push(element);
 
                 for _ in 1..level_length {
                     element = diff_supplier(self, &table2, element)?;
-                    println!("    {}", element);
                     symbols.push(element);
                 }
             }
@@ -172,7 +169,7 @@ pub struct RangedIntegerHuffmanTable {
 }
 
 impl RangedIntegerHuffmanTable {
-    fn new(min: u32, max: u32) -> Self {
+    pub fn new(min: u32, max: u32) -> Self {
         if max < min {
             panic!("Invalid range");
         }
