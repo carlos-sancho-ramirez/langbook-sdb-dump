@@ -2,6 +2,7 @@ use std::env;
 use std::fmt::{Display, Formatter, Write};
 use std::fs::File;
 use std::io::Read;
+use std::ops::Range;
 use huffman::InputBitStream;
 use huffman::NaturalNumberHuffmanTable;
 use crate::file_utils::ReadError;
@@ -82,6 +83,13 @@ struct Language {
     number_of_alphabets: u8
 }
 
+struct Conversion {
+    source_alphabet: u32,
+    target_alphabet: u32,
+    sources: Vec<u32>,
+    targets: Vec<u32>
+}
+
 struct SdbReader<'a> {
     stream: InputBitStream<'a>,
     natural2_table: NaturalNumberHuffmanTable,
@@ -92,7 +100,8 @@ struct SdbReader<'a> {
 
 struct SdbReadResult {
     symbol_arrays: Vec<String>,
-    languages: Vec<Language>
+    languages: Vec<Language>,
+    conversions: Vec<Conversion>
 }
 
 impl<'a> SdbReader<'a> {
@@ -136,6 +145,45 @@ impl<'a> SdbReader<'a> {
         Ok(languages)
     }
 
+    fn read_conversions(&mut self, valid_alphabets: &Range<u32>, valid_symbol_arrays: &Range<u32>) -> Result<Vec<Conversion>, ReadError> {
+        let number_of_conversions = self.stream.read_symbol(&self.natural8_table)?;
+        let symbol_array_table = RangedIntegerHuffmanTable::from(valid_symbol_arrays);
+        let max_valid_alphabet = valid_alphabets.end - 1;
+        let mut min_source_alphabet = valid_alphabets.start;
+        let mut min_target_alphabet = valid_alphabets.start;
+        let mut conversions: Vec<Conversion> = Vec::new();
+        for _ in 0..number_of_conversions {
+            let source_alphabet_table = RangedIntegerHuffmanTable::new(min_source_alphabet, max_valid_alphabet);
+            let source_alphabet = self.stream.read_symbol(&source_alphabet_table)?;
+
+            if min_source_alphabet != source_alphabet {
+                min_target_alphabet = valid_alphabets.start;
+                min_source_alphabet = source_alphabet;
+            }
+
+            let target_alphabet_table = RangedIntegerHuffmanTable::new(min_target_alphabet, max_valid_alphabet);
+            let target_alphabet = self.stream.read_symbol(&target_alphabet_table)?;
+            min_target_alphabet = target_alphabet + 1;
+
+            let pair_count = self.stream.read_symbol(&self.natural8_table)?;
+            let mut sources: Vec<u32> = Vec::new();
+            let mut targets: Vec<u32> = Vec::new();
+            for _ in 0..pair_count {
+                sources.push(self.stream.read_symbol(&symbol_array_table)?);
+                targets.push(self.stream.read_symbol(&symbol_array_table)?);
+            }
+
+            conversions.push(Conversion {
+                source_alphabet,
+                target_alphabet,
+                sources,
+                targets
+            })
+        }
+
+        Ok(conversions)
+    }
+
     fn read(mut self) -> Result<SdbReadResult, ReadError> {
         let symbol_array_count = self.stream.read_symbol(&self.natural8_table)?;
         let chars_table = self.stream.read_table(&self.natural8_table, &self.natural4_table, InputBitStream::read_character, InputBitStream::read_diff_character)?;
@@ -143,9 +191,23 @@ impl<'a> SdbReader<'a> {
         let symbol_arrays = self.read_symbol_arrays(symbol_array_count, symbol_arrays_length_table, chars_table)?;
         let languages = self.read_languages()?;
 
+        if symbol_array_count == 0 {
+            todo!("Implementation missing when symbol array count is 0");
+        }
+
+        let mut alphabet_count: u32 = 0;
+        for language in &languages {
+            alphabet_count += u32::from(language.number_of_alphabets);
+        }
+        let valid_alphabets = 0..alphabet_count;
+        let valid_symbol_arrays = 0..symbol_array_count;
+
+        let conversions = self.read_conversions(&valid_alphabets, &valid_symbol_arrays)?;
+
         Ok(SdbReadResult {
             symbol_arrays,
-            languages
+            languages,
+            conversions
         })
     }
 }
@@ -172,8 +234,14 @@ fn main() {
                         Ok(result) => {
                             println!("Symbol arrays read - {} entries", result.symbol_arrays.len());
                             println!("Languages read - {} languages found" , result.languages.len());
-                            for lang in result.languages {
-                                println!("  {} has {} alphabet(s)", lang.code, lang.number_of_alphabets);
+                            println!("Conversions read - {} conversions found" , result.conversions.len());
+                            for conversion_index in 0..result.conversions.len() {
+                                println!("  Conversion #{}", conversion_index);
+                                for pair_index in 0..result.conversions[conversion_index].sources.len() {
+                                    let source_symbol_array_index = result.conversions[conversion_index].sources[pair_index] as usize;
+                                    let target_symbol_array_index = result.conversions[conversion_index].targets[pair_index] as usize;
+                                    println!("    {} -> {}", result.symbol_arrays[source_symbol_array_index], result.symbol_arrays[target_symbol_array_index]);
+                                }
                             }
                         },
                         Err(err) => println!("Error found: {}", err.message)

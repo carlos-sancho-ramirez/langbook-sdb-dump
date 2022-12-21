@@ -1,6 +1,7 @@
 use std::fmt::Display;
 use std::fs::File;
 use std::io::Bytes;
+use std::ops::Range;
 use crate::file_utils;
 use file_utils::ReadError;
 
@@ -188,6 +189,12 @@ impl RangedIntegerHuffmanTable {
             max_bits,
             limit
         }
+    }
+}
+
+impl From<&Range<u32>> for RangedIntegerHuffmanTable {
+    fn from(range: &Range<u32>) -> Self {
+        RangedIntegerHuffmanTable::new(range.start, range.end - 1)
     }
 }
 
