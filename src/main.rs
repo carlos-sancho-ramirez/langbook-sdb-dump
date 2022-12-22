@@ -1,3 +1,4 @@
+use std::collections::HashMap;
 use std::env;
 use std::fmt::{Display, Formatter, Write};
 use std::fs::File;
@@ -6,7 +7,7 @@ use std::ops::Range;
 use huffman::InputBitStream;
 use huffman::NaturalNumberHuffmanTable;
 use crate::file_utils::ReadError;
-use crate::huffman::{HuffmanTable, RangedIntegerHuffmanTable};
+use crate::huffman::{HuffmanTable, IntegerNumberHuffmanTable, RangedIntegerHuffmanTable};
 
 pub mod file_utils;
 pub mod huffman;
@@ -95,13 +96,16 @@ struct SdbReader<'a> {
     natural2_table: NaturalNumberHuffmanTable,
     natural3_table: NaturalNumberHuffmanTable,
     natural4_table: NaturalNumberHuffmanTable,
-    natural8_table: NaturalNumberHuffmanTable
+    natural8_table: NaturalNumberHuffmanTable,
+    integer8_table: IntegerNumberHuffmanTable
 }
 
 struct SdbReadResult {
     symbol_arrays: Vec<String>,
     languages: Vec<Language>,
-    conversions: Vec<Conversion>
+    conversions: Vec<Conversion>,
+    max_concept: u32,
+    correlations: Vec<HashMap<u32, u32>>
 }
 
 impl<'a> SdbReader<'a> {
@@ -184,6 +188,37 @@ impl<'a> SdbReader<'a> {
         Ok(conversions)
     }
 
+    fn read_correlations(&mut self, valid_alphabets: &Range<u32>, symbol_array_count: u32) -> Result<Vec<HashMap<u32, u32>>, ReadError> {
+        let number_of_correlations = self.stream.read_symbol(&self.natural8_table)?;
+        let mut correlations: Vec<HashMap<u32, u32>> = Vec::new();
+        if number_of_correlations > 0 {
+            // TODO: Improve codification for this table, it include lot of edge cases that should not be possible
+            let length_table = self.stream.read_table(&self.integer8_table, &self.natural8_table, InputBitStream::read_symbol,InputBitStream::read_diff_i32)?;
+            for _ in 0..number_of_correlations {
+                let map_length = u32::try_from(self.stream.read_symbol(&length_table)?).unwrap();
+                if map_length >= valid_alphabets.end {
+                    panic!("Map for correlation cannot be longer than the actual number of valid alphabets");
+                }
+
+                let mut map: HashMap<u32, u32> = HashMap::new();
+                let key_table = RangedIntegerHuffmanTable::new(valid_alphabets.start, valid_alphabets.end - map_length);
+                let value_table = RangedIntegerHuffmanTable::new(0, symbol_array_count - 1);
+                let mut key = self.stream.read_symbol(&key_table)?;
+                let value = self.stream.read_symbol(&value_table)?;
+                map.insert(key, value);
+                for map_index in 1..map_length {
+                    let key_diff_table = RangedIntegerHuffmanTable::new(key + 1, valid_alphabets.end - map_length + map_index);
+                    key = self.stream.read_symbol(&key_diff_table)?;
+                    let value = self.stream.read_symbol(&value_table)?;
+                    map.insert(key, value);
+                }
+                correlations.push(map);
+            }
+        }
+
+        Ok(correlations)
+    }
+
     fn read(mut self) -> Result<SdbReadResult, ReadError> {
         let symbol_array_count = self.stream.read_symbol(&self.natural8_table)?;
         let chars_table = self.stream.read_table(&self.natural8_table, &self.natural4_table, InputBitStream::read_character, InputBitStream::read_diff_character)?;
@@ -203,11 +238,15 @@ impl<'a> SdbReader<'a> {
         let valid_symbol_arrays = 0..symbol_array_count;
 
         let conversions = self.read_conversions(&valid_alphabets, &valid_symbol_arrays)?;
+        let max_concept = self.stream.read_symbol(&self.natural8_table)?;
+        let correlations = self.read_correlations(&valid_alphabets, symbol_array_count)?;
 
         Ok(SdbReadResult {
             symbol_arrays,
             languages,
-            conversions
+            conversions,
+            max_concept,
+            correlations
         })
     }
 }
@@ -227,7 +266,8 @@ fn main() {
                             natural2_table: NaturalNumberHuffmanTable::create_with_alignment(2),
                             natural3_table: NaturalNumberHuffmanTable::create_with_alignment(3),
                             natural4_table: NaturalNumberHuffmanTable::create_with_alignment(4),
-                            natural8_table: NaturalNumberHuffmanTable::create_with_alignment(8)
+                            natural8_table: NaturalNumberHuffmanTable::create_with_alignment(8),
+                            integer8_table: IntegerNumberHuffmanTable::create_with_alignment(8)
                         };
                         reader.read()
                     }) {
@@ -235,13 +275,18 @@ fn main() {
                             println!("Symbol arrays read - {} entries", result.symbol_arrays.len());
                             println!("Languages read - {} languages found" , result.languages.len());
                             println!("Conversions read - {} conversions found" , result.conversions.len());
-                            for conversion_index in 0..result.conversions.len() {
-                                println!("  Conversion #{}", conversion_index);
-                                for pair_index in 0..result.conversions[conversion_index].sources.len() {
-                                    let source_symbol_array_index = result.conversions[conversion_index].sources[pair_index] as usize;
-                                    let target_symbol_array_index = result.conversions[conversion_index].targets[pair_index] as usize;
-                                    println!("    {} -> {}", result.symbol_arrays[source_symbol_array_index], result.symbol_arrays[target_symbol_array_index]);
-                                }
+                            println!("Found {} concepts", result.max_concept);
+                            println!("Correlations read - {} correlations found", result.correlations.len());
+
+                            for correlation in result.correlations {
+                                let corr_str = correlation.into_values().map(|v| &result.symbol_arrays[v as usize])
+                                    .fold(String::new(), |mut acc, item| {
+                                        acc.push('/');
+                                        acc.push_str(&item);
+                                        acc
+                                    });
+
+                                println!("  Correlation: {}", corr_str);
                             }
                         },
                         Err(err) => println!("Error found: {}", err.message)

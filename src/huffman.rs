@@ -53,7 +53,14 @@ impl<'a> InputBitStream<'a> {
     }
 
     pub fn read_diff_u32<T: HuffmanTable<u32>>(&mut self, table: &T, previous: u32) -> Result<u32, ReadError> {
-        Ok(self.read_symbol(table)? + previous + 1)
+        Ok(previous + self.read_symbol(table)? + 1u32)
+    }
+
+    pub fn read_diff_i32<T: HuffmanTable<u32>>(&mut self, table: &T, previous: i32) -> Result<i32, ReadError> {
+        match i32::try_from(self.read_symbol(table)?) {
+            Ok(x) => Ok(previous + x + 1),
+            Err(_) => panic!("Out of range")
+        }
     }
 
     pub fn read_character<T: HuffmanTable<u32>>(&mut self, table: &T) -> Result<char, ReadError> {
@@ -128,7 +135,7 @@ pub struct NaturalNumberHuffmanTable {
 }
 
 impl NaturalNumberHuffmanTable {
-    pub fn create_with_alignment(alignment: u32) -> NaturalNumberHuffmanTable {
+    pub fn create_with_alignment(alignment: u32) -> Self {
         NaturalNumberHuffmanTable {
             alignment
         }
@@ -158,6 +165,63 @@ impl HuffmanTable<u32> for NaturalNumberHuffmanTable {
             }
 
             Ok(base + index)
+        }
+    }
+}
+
+pub struct IntegerNumberHuffmanTable {
+    alignment: u32
+}
+
+impl IntegerNumberHuffmanTable {
+    pub fn create_with_alignment(alignment: u32) -> Self {
+        IntegerNumberHuffmanTable {
+            alignment
+        }
+    }
+}
+
+impl HuffmanTable<i32> for IntegerNumberHuffmanTable {
+    fn symbols_with_bits(&self, bits: u32) -> u32 {
+        if bits > 0 && bits % self.alignment == 0 {
+            1 << ((bits / self.alignment) * (self.alignment - 1))
+        }
+        else {
+            0
+        }
+    }
+
+    fn get_symbol(&self, bits: u32, index: u32) -> Result<i32, &str> {
+        if bits == 0 || bits % self.alignment != 0 {
+            Err("Invalid symbol")
+        }
+        else {
+            let symbols_per_segment = self.symbols_with_bits(bits) / 2;
+            let segment_alignment = self.alignment - 1;
+            let mut base = 0i32;
+
+            Ok(if index < symbols_per_segment {
+                let multiplier = (bits - 1) / self.alignment;
+                if multiplier > 0 {
+                    let mut exp = multiplier * segment_alignment - 1;
+                    while exp > 0 {
+                        base += 1 << exp;
+                        exp -= segment_alignment;
+                    }
+                }
+
+                base + i32::try_from(index).unwrap()
+            }
+            else {
+                let mut base = 0i32;
+                let mut exp = (bits / self.alignment) * segment_alignment - 1;
+                while exp > 0 {
+                    base -= 1 << exp;
+                    exp -= segment_alignment;
+                }
+
+                base + i32::try_from(index - symbols_per_segment).unwrap()
+            })
         }
     }
 }
