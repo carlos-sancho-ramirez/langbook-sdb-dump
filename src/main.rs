@@ -105,7 +105,8 @@ struct SdbReadResult {
     languages: Vec<Language>,
     conversions: Vec<Conversion>,
     max_concept: u32,
-    correlations: Vec<HashMap<u32, u32>>
+    correlations: Vec<HashMap<u32, u32>>,
+    correlation_arrays: Vec<Vec<u32>>
 }
 
 impl<'a> SdbReader<'a> {
@@ -192,6 +193,9 @@ impl<'a> SdbReader<'a> {
         let number_of_correlations = self.stream.read_symbol(&self.natural8_table)?;
         let mut correlations: Vec<HashMap<u32, u32>> = Vec::new();
         if number_of_correlations > 0 {
+            // The serialization of correlations can be improved in several ways:
+            // - There can be only one correlation with length 0. It could be serialised with a single bit: 0 (not present), 1 (present at the beginning)
+            // - If correlations cannot mix alphabets from different languages, then we could reduce the number of possible keys once we know the first key, or even the language. For languages where only one alphabet is available, then the length and the key gets irrelevant
             // TODO: Improve codification for this table, it include lot of edge cases that should not be possible
             let length_table = self.stream.read_table(&self.integer8_table, &self.natural8_table, InputBitStream::read_symbol,InputBitStream::read_diff_i32)?;
             for _ in 0..number_of_correlations {
@@ -201,22 +205,45 @@ impl<'a> SdbReader<'a> {
                 }
 
                 let mut map: HashMap<u32, u32> = HashMap::new();
-                let key_table = RangedIntegerHuffmanTable::new(valid_alphabets.start, valid_alphabets.end - map_length);
-                let value_table = RangedIntegerHuffmanTable::new(0, symbol_array_count - 1);
-                let mut key = self.stream.read_symbol(&key_table)?;
-                let value = self.stream.read_symbol(&value_table)?;
-                map.insert(key, value);
-                for map_index in 1..map_length {
-                    let key_diff_table = RangedIntegerHuffmanTable::new(key + 1, valid_alphabets.end - map_length + map_index);
-                    key = self.stream.read_symbol(&key_diff_table)?;
+                if map_length > 0 {
+                    let key_table = RangedIntegerHuffmanTable::new(valid_alphabets.start, valid_alphabets.end - map_length);
+                    let value_table = RangedIntegerHuffmanTable::new(0, symbol_array_count - 1);
+                    let mut key = self.stream.read_symbol(&key_table)?;
                     let value = self.stream.read_symbol(&value_table)?;
                     map.insert(key, value);
+                    for map_index in 1..map_length {
+                        let key_diff_table = RangedIntegerHuffmanTable::new(key + 1, valid_alphabets.end - map_length + map_index);
+                        key = self.stream.read_symbol(&key_diff_table)?;
+                        let value = self.stream.read_symbol(&value_table)?;
+                        map.insert(key, value);
+                    }
                 }
                 correlations.push(map);
             }
         }
 
         Ok(correlations)
+    }
+
+    fn read_correlation_arrays(&mut self, number_of_correlations: usize) -> Result<Vec<Vec<u32>>, ReadError> {
+        let number_of_arrays = self.stream.read_symbol(&self.natural8_table)?;
+        let mut arrays: Vec<Vec<u32>> = Vec::new();
+        if number_of_arrays > 0 {
+            let correlation_table = RangedIntegerHuffmanTable::new(0, u32::try_from(number_of_correlations).unwrap() - 1);
+            // TODO: Improve codification for this table, it include lot of edge cases that should not be possible
+            let length_table = self.stream.read_table(&self.integer8_table, &self.natural8_table, InputBitStream::read_symbol,InputBitStream::read_diff_i32)?;
+
+            for _ in 0..number_of_arrays {
+                let array_length = self.stream.read_symbol(&length_table)?;
+                let mut array: Vec<u32> = Vec::new();
+                for _ in 0..array_length {
+                    array.push(self.stream.read_symbol(&correlation_table)?);
+                }
+                arrays.push(array);
+            }
+        }
+
+        Ok(arrays)
     }
 
     fn read(mut self) -> Result<SdbReadResult, ReadError> {
@@ -240,14 +267,43 @@ impl<'a> SdbReader<'a> {
         let conversions = self.read_conversions(&valid_alphabets, &valid_symbol_arrays)?;
         let max_concept = self.stream.read_symbol(&self.natural8_table)?;
         let correlations = self.read_correlations(&valid_alphabets, symbol_array_count)?;
+        let correlation_arrays = self.read_correlation_arrays(correlations.len())?;
 
         Ok(SdbReadResult {
             symbol_arrays,
             languages,
             conversions,
             max_concept,
-            correlations
+            correlations,
+            correlation_arrays,
         })
+    }
+}
+
+impl SdbReadResult {
+    fn get_complete_correlation(&self, correlation_array_index: usize) -> HashMap<u32, String> {
+        let mut result: HashMap<u32, String> = HashMap::new();
+        let array: &Vec<u32> = &self.correlation_arrays[correlation_array_index];
+        let array_length = array.len();
+        if array_length == 0 {
+            return result;
+        }
+
+        let correlation: &HashMap<u32, u32> = &self.correlations[usize::try_from(array[0]).unwrap()];
+        for (key, value) in correlation {
+            result.insert(*key, self.symbol_arrays[usize::try_from(*value).unwrap()].clone());
+        }
+
+        if array_length > 1 {
+            for array_index in 1..array_length {
+                for (key, value) in self.correlations[usize::try_from(array[array_index]).unwrap()].iter() {
+                    let text = &self.symbol_arrays[usize::try_from(*value).unwrap()];
+                    result.get_mut(key).unwrap().push_str(text);
+                }
+            }
+        }
+
+        result
     }
 }
 
@@ -277,16 +333,15 @@ fn main() {
                             println!("Conversions read - {} conversions found" , result.conversions.len());
                             println!("Found {} concepts", result.max_concept);
                             println!("Correlations read - {} correlations found", result.correlations.len());
+                            println!("Correlation arrays read - {} correlation arrays found", result.correlation_arrays.len());
 
-                            for correlation in result.correlations {
-                                let corr_str = correlation.into_values().map(|v| &result.symbol_arrays[v as usize])
-                                    .fold(String::new(), |mut acc, item| {
-                                        acc.push('/');
-                                        acc.push_str(&item);
-                                        acc
-                                    });
-
-                                println!("  Correlation: {}", corr_str);
+                            for array_index in 0..result.correlation_arrays.len() {
+                                let correlation_text = result.get_complete_correlation(array_index).into_values().fold(String::new(), |mut acc, x| {
+                                    acc.push('/');
+                                    acc.push_str(&x);
+                                    acc
+                                });
+                                println!("  {}", correlation_text);
                             }
                         },
                         Err(err) => println!("Error found: {}", err.message)
