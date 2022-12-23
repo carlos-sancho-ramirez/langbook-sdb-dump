@@ -1,5 +1,6 @@
 use std::collections::HashMap;
 use std::fmt::{Display, Formatter, Write};
+use std::hash::{Hash, Hasher};
 use crate::file_utils::ReadError;
 use crate::huffman::{HuffmanTable, InputBitStream, IntegerNumberHuffmanTable, NaturalNumberHuffmanTable, RangedIntegerHuffmanTable};
 
@@ -28,17 +29,41 @@ impl Display for LanguageCode {
 
 pub struct Language {
     code: LanguageCode,
-    number_of_alphabets: u8
+    number_of_alphabets: usize
 }
 
 pub struct SymbolArrayIndex {
     index: usize
 }
 
+#[derive(Copy, Clone)]
+pub struct Alphabet {
+    index: usize
+}
+
+impl PartialEq<Self> for Alphabet {
+    fn eq(&self, other: &Self) -> bool {
+        self.index == other.index
+    }
+}
+
+impl Eq for Alphabet {
+}
+
+impl Hash for Alphabet {
+    fn hash<H: Hasher>(&self, state: &mut H) {
+        self.index.hash(state)
+    }
+}
+
 pub struct Conversion {
-    source_alphabet: u32,
-    target_alphabet: u32,
+    source: Alphabet,
+    target: Alphabet,
     pairs: Vec<(SymbolArrayIndex, SymbolArrayIndex)>
+}
+
+pub struct CorrelationIndex {
+    index: usize
 }
 
 pub struct SdbReader<'a> {
@@ -55,8 +80,8 @@ pub struct SdbReadResult {
     pub languages: Vec<Language>,
     pub conversions: Vec<Conversion>,
     pub max_concept: u32,
-    pub correlations: Vec<HashMap<u32, SymbolArrayIndex>>,
-    pub correlation_arrays: Vec<Vec<u32>>
+    pub correlations: Vec<HashMap<Alphabet, SymbolArrayIndex>>,
+    pub correlation_arrays: Vec<Vec<CorrelationIndex>>
 }
 
 impl<'a> SdbReader<'a> {
@@ -71,7 +96,7 @@ impl<'a> SdbReader<'a> {
         }
     }
 
-    fn read_symbol_arrays(&mut self, symbol_array_count: u32, symbol_arrays_length_table: impl HuffmanTable<u32>, chars_table: impl HuffmanTable<char>) -> Result<Vec<String>, ReadError> {
+    fn read_symbol_arrays(&mut self, symbol_array_count: usize, symbol_arrays_length_table: impl HuffmanTable<u32>, chars_table: impl HuffmanTable<char>) -> Result<Vec<String>, ReadError> {
         let mut symbol_arrays: Vec<String> = Vec::new();
         for _ in 0..symbol_array_count {
             let length = self.stream.read_symbol(&symbol_arrays_length_table)?;
@@ -97,10 +122,7 @@ impl<'a> SdbReader<'a> {
             let code = LanguageCode::new(raw_lang_code);
             first_valid_lang_code = raw_lang_code + 1;
 
-            let number_of_alphabets = match u8::try_from(self.stream.read_symbol(&self.natural2_table)?) {
-                Ok(x) => x,
-                Err(_) => return Err(ReadError::from("Too many alphabets for a single language"))
-            };
+            let number_of_alphabets = usize::try_from(self.stream.read_symbol(&self.natural2_table)?).expect("Too many alphabets for a single language");
 
             languages.push(Language {
                 code,
@@ -111,25 +133,32 @@ impl<'a> SdbReader<'a> {
         Ok(languages)
     }
 
-    fn read_conversions(&mut self, alphabet_count: u32, symbol_array_count: u32) -> Result<Vec<Conversion>, ReadError> {
+    fn read_conversions(&mut self, alphabet_count: usize, symbol_array_count: usize) -> Result<Vec<Conversion>, ReadError> {
         let number_of_conversions = self.stream.read_symbol(&self.natural8_table)?;
-        let symbol_array_table = RangedIntegerHuffmanTable::new(0, symbol_array_count - 1);
+        let symbol_array_table = RangedIntegerHuffmanTable::new(0, u32::try_from(symbol_array_count - 1).unwrap());
         let max_valid_alphabet = alphabet_count - 1;
         let mut min_source_alphabet = 0;
         let mut min_target_alphabet = 0;
         let mut conversions: Vec<Conversion> = Vec::new();
         for _ in 0..number_of_conversions {
-            let source_alphabet_table = RangedIntegerHuffmanTable::new(min_source_alphabet, max_valid_alphabet);
-            let source_alphabet = self.stream.read_symbol(&source_alphabet_table)?;
+            let source_alphabet_table = RangedIntegerHuffmanTable::new(min_source_alphabet, u32::try_from(max_valid_alphabet).unwrap());
+            let raw_source_alphabet = self.stream.read_symbol(&source_alphabet_table)?;
+            let source_alphabet = Alphabet {
+                index: usize::try_from(raw_source_alphabet).unwrap()
+            };
 
-            if min_source_alphabet != source_alphabet {
+            if min_source_alphabet != raw_source_alphabet {
                 min_target_alphabet = 0;
-                min_source_alphabet = source_alphabet;
+                min_source_alphabet = raw_source_alphabet;
             }
 
-            let target_alphabet_table = RangedIntegerHuffmanTable::new(min_target_alphabet, max_valid_alphabet);
-            let target_alphabet = self.stream.read_symbol(&target_alphabet_table)?;
-            min_target_alphabet = target_alphabet + 1;
+            let target_alphabet_table = RangedIntegerHuffmanTable::new(min_target_alphabet, u32::try_from(max_valid_alphabet).unwrap());
+            let raw_target_alphabet = self.stream.read_symbol(&target_alphabet_table)?;
+            let target_alphabet = Alphabet {
+                index: usize::try_from(raw_target_alphabet).unwrap()
+            };
+
+            min_target_alphabet = raw_target_alphabet + 1;
 
             let pair_count = self.stream.read_symbol(&self.natural8_table)?;
             let mut pairs: Vec<(SymbolArrayIndex, SymbolArrayIndex)> = Vec::new();
@@ -145,8 +174,8 @@ impl<'a> SdbReader<'a> {
             }
 
             conversions.push(Conversion {
-                source_alphabet,
-                target_alphabet,
+                source: source_alphabet,
+                target: target_alphabet,
                 pairs
             })
         }
@@ -154,9 +183,11 @@ impl<'a> SdbReader<'a> {
         Ok(conversions)
     }
 
-    fn read_correlations(&mut self, alphabet_count: u32, symbol_array_count: u32) -> Result<Vec<HashMap<u32, SymbolArrayIndex>>, ReadError> {
+    fn read_correlations(&mut self, alphabet_count: usize, symbol_array_count: usize) -> Result<Vec<HashMap<Alphabet, SymbolArrayIndex>>, ReadError> {
         let number_of_correlations = self.stream.read_symbol(&self.natural8_table)?;
-        let mut correlations: Vec<HashMap<u32, SymbolArrayIndex>> = Vec::new();
+        let alphabet_count_u32 = u32::try_from(alphabet_count).unwrap();
+        let symbol_array_count_u32 = u32::try_from(symbol_array_count).unwrap();
+        let mut correlations: Vec<HashMap<Alphabet, SymbolArrayIndex>> = Vec::new();
         if number_of_correlations > 0 {
             // The serialization of correlations can be improved in several ways:
             // - There can be only one correlation with length 0. It could be serialised with a single bit: 0 (not present), 1 (present at the beginning)
@@ -165,22 +196,30 @@ impl<'a> SdbReader<'a> {
             let length_table = self.stream.read_table(&self.integer8_table, &self.natural8_table, InputBitStream::read_symbol,InputBitStream::read_diff_i32)?;
             for _ in 0..number_of_correlations {
                 let map_length = u32::try_from(self.stream.read_symbol(&length_table)?).unwrap();
-                if map_length >= alphabet_count {
+                if map_length >= alphabet_count_u32 {
                     panic!("Map for correlation cannot be longer than the actual number of valid alphabets");
                 }
 
-                let mut map: HashMap<u32, SymbolArrayIndex> = HashMap::new();
+                let mut map: HashMap<Alphabet, SymbolArrayIndex> = HashMap::new();
                 if map_length > 0 {
-                    let key_table = RangedIntegerHuffmanTable::new(0, alphabet_count - map_length);
-                    let value_table = RangedIntegerHuffmanTable::new(0, symbol_array_count - 1);
-                    let mut key = self.stream.read_symbol(&key_table)?;
+                    let key_table = RangedIntegerHuffmanTable::new(0, alphabet_count_u32 - map_length);
+                    let value_table = RangedIntegerHuffmanTable::new(0, symbol_array_count_u32 - 1);
+                    let mut raw_key = self.stream.read_symbol(&key_table)?;
+                    let key = Alphabet {
+                        index: usize::try_from(raw_key).unwrap()
+                    };
+
                     let value = SymbolArrayIndex {
                         index: usize::try_from(self.stream.read_symbol(&value_table)?).unwrap()
                     };
                     map.insert(key, value);
                     for map_index in 1..map_length {
-                        let key_diff_table = RangedIntegerHuffmanTable::new(key + 1, alphabet_count - map_length + map_index);
-                        key = self.stream.read_symbol(&key_diff_table)?;
+                        let key_diff_table = RangedIntegerHuffmanTable::new(raw_key + 1, alphabet_count_u32 - map_length + map_index);
+                        raw_key = self.stream.read_symbol(&key_diff_table)?;
+                        let key = Alphabet {
+                            index: usize::try_from(raw_key).unwrap()
+                        };
+
                         let value = SymbolArrayIndex {
                             index: usize::try_from(self.stream.read_symbol(&value_table)?).unwrap()
                         };
@@ -195,9 +234,9 @@ impl<'a> SdbReader<'a> {
         Ok(correlations)
     }
 
-    fn read_correlation_arrays(&mut self, number_of_correlations: usize) -> Result<Vec<Vec<u32>>, ReadError> {
+    fn read_correlation_arrays(&mut self, number_of_correlations: usize) -> Result<Vec<Vec<CorrelationIndex>>, ReadError> {
         let number_of_arrays = self.stream.read_symbol(&self.natural8_table)?;
-        let mut arrays: Vec<Vec<u32>> = Vec::new();
+        let mut arrays: Vec<Vec<CorrelationIndex>> = Vec::new();
         if number_of_arrays > 0 {
             let correlation_table = RangedIntegerHuffmanTable::new(0, u32::try_from(number_of_correlations).unwrap() - 1);
             // TODO: Improve codification for this table, it include lot of edge cases that should not be possible
@@ -205,9 +244,11 @@ impl<'a> SdbReader<'a> {
 
             for _ in 0..number_of_arrays {
                 let array_length = self.stream.read_symbol(&length_table)?;
-                let mut array: Vec<u32> = Vec::new();
+                let mut array: Vec<CorrelationIndex> = Vec::new();
                 for _ in 0..array_length {
-                    array.push(self.stream.read_symbol(&correlation_table)?);
+                    array.push(CorrelationIndex {
+                        index: usize::try_from(self.stream.read_symbol(&correlation_table)?).unwrap()
+                    });
                 }
                 arrays.push(array);
             }
@@ -217,7 +258,7 @@ impl<'a> SdbReader<'a> {
     }
 
     pub fn read(mut self) -> Result<SdbReadResult, ReadError> {
-        let symbol_array_count = self.stream.read_symbol(&self.natural8_table)?;
+        let symbol_array_count = usize::try_from(self.stream.read_symbol(&self.natural8_table)?).unwrap();
         let chars_table = self.stream.read_table(&self.natural8_table, &self.natural4_table, InputBitStream::read_character, InputBitStream::read_diff_character)?;
         let symbol_arrays_length_table = self.stream.read_table(&self.natural8_table, &self.natural3_table, InputBitStream::read_symbol, InputBitStream::read_diff_u32)?;
         let symbol_arrays = self.read_symbol_arrays(symbol_array_count, symbol_arrays_length_table, chars_table)?;
@@ -227,9 +268,9 @@ impl<'a> SdbReader<'a> {
             todo!("Implementation missing when symbol array count is 0");
         }
 
-        let mut alphabet_count: u32 = 0;
+        let mut alphabet_count: usize = 0;
         for language in &languages {
-            alphabet_count += u32::from(language.number_of_alphabets);
+            alphabet_count += language.number_of_alphabets;
         }
 
         let conversions = self.read_conversions(alphabet_count, symbol_array_count)?;
@@ -249,22 +290,22 @@ impl<'a> SdbReader<'a> {
 }
 
 impl SdbReadResult {
-    pub fn get_complete_correlation(&self, correlation_array_index: usize) -> HashMap<u32, String> {
-        let mut result: HashMap<u32, String> = HashMap::new();
-        let array: &Vec<u32> = &self.correlation_arrays[correlation_array_index];
+    pub fn get_complete_correlation(&self, correlation_array_index: usize) -> HashMap<Alphabet, String> {
+        let mut result: HashMap<Alphabet, String> = HashMap::new();
+        let array: &Vec<CorrelationIndex> = &self.correlation_arrays[correlation_array_index];
         let array_length = array.len();
         if array_length == 0 {
             return result;
         }
 
-        let correlation: &HashMap<u32, SymbolArrayIndex> = &self.correlations[usize::try_from(array[0]).unwrap()];
+        let correlation: &HashMap<Alphabet, SymbolArrayIndex> = &self.correlations[array[0].index];
         for (key, value) in correlation {
             result.insert(*key, self.symbol_arrays[value.index].clone());
         }
 
         if array_length > 1 {
             for array_index in 1..array_length {
-                for (key, value) in self.correlations[usize::try_from(array[array_index]).unwrap()].iter() {
+                for (key, value) in self.correlations[array[array_index].index].iter() {
                     let text = &self.symbol_arrays[value.index];
                     result.get_mut(key).unwrap().push_str(text);
                 }
