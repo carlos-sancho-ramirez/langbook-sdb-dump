@@ -1,8 +1,9 @@
+use std::collections::{HashMap, HashSet};
 use std::env;
 use std::fs::File;
 use std::io::Read;
 use huffman::InputBitStream;
-use crate::sdb::SdbReader;
+use crate::sdb::{CorrelationArrayIndex, SdbReader};
 
 pub mod file_utils;
 pub mod huffman;
@@ -71,14 +72,40 @@ fn main() {
                             println!("Found {} concepts", result.max_concept);
                             println!("Correlations read - {} correlations found", result.correlations.len());
                             println!("Correlation arrays read - {} correlation arrays found", result.correlation_arrays.len());
+                            println!("Acceptations read - {} acceptations found", result.acceptations.len());
 
-                            for array_index in 0..result.correlation_arrays.len() {
-                                let correlation_text = result.get_complete_correlation(array_index).into_values().fold(String::new(), |mut acc, x| {
-                                    acc.push('/');
-                                    acc.push_str(&x);
-                                    acc
-                                });
-                                println!("  {}", correlation_text);
+                            let mut synonyms: HashMap<u32, HashSet<CorrelationArrayIndex>> = HashMap::new();
+                            for acc in result.acceptations.iter() {
+                                match synonyms.get_mut(&acc.concept) {
+                                    Some(set) => {
+                                        set.insert(acc.correlation_array_index);
+                                    },
+                                    None => {
+                                        let mut new_set: HashSet<CorrelationArrayIndex> = HashSet::new();
+                                        new_set.insert(acc.correlation_array_index);
+                                        synonyms.insert(acc.concept, new_set);
+                                    }
+                                }
+                            }
+
+                            for set in synonyms.into_values() {
+                                let text = set.into_iter().map(|correlation_array_index| {
+                                    result.get_complete_correlation(correlation_array_index).into_values().reduce(|a, b| {
+                                        let mut c = String::new();
+                                        c.push_str(&a);
+                                        c.push('/');
+                                        c.push_str(&b);
+                                        c
+                                    }).unwrap()
+                                })
+                                .reduce(|a, b| {
+                                    let mut c = String::new();
+                                    c.push_str(&a);
+                                    c.push_str(" <--> ");
+                                    c.push_str(&b);
+                                    c
+                                }).unwrap();
+                                println!("  {}", text);
                             }
                         },
                         Err(err) => println!("Error found: {}", err.message)

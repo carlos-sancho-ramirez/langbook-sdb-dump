@@ -66,6 +66,22 @@ pub struct CorrelationIndex {
     index: usize
 }
 
+#[derive(Copy, Clone, Eq, PartialEq)]
+pub struct CorrelationArrayIndex {
+    index: usize
+}
+
+impl Hash for CorrelationArrayIndex {
+    fn hash<H: Hasher>(&self, state: &mut H) {
+        self.index.hash(state)
+    }
+}
+
+pub struct Acceptation {
+    pub concept: u32,
+    pub correlation_array_index: CorrelationArrayIndex
+}
+
 pub struct SdbReader<'a> {
     stream: InputBitStream<'a>,
     natural2_table: NaturalNumberHuffmanTable,
@@ -79,9 +95,10 @@ pub struct SdbReadResult {
     pub symbol_arrays: Vec<String>,
     pub languages: Vec<Language>,
     pub conversions: Vec<Conversion>,
-    pub max_concept: u32,
+    pub max_concept: usize,
     pub correlations: Vec<HashMap<Alphabet, SymbolArrayIndex>>,
-    pub correlation_arrays: Vec<Vec<CorrelationIndex>>
+    pub correlation_arrays: Vec<Vec<CorrelationIndex>>,
+    pub acceptations: Vec<Acceptation>
 }
 
 impl<'a> SdbReader<'a> {
@@ -257,6 +274,50 @@ impl<'a> SdbReader<'a> {
         Ok(arrays)
     }
 
+    fn read_acceptations(&mut self, min_valid_concept: usize, max_valid_concept: usize, correlation_array_count: usize) -> Result<Vec<Acceptation>, ReadError> {
+        let number_of_entries = self.stream.read_symbol(&self.natural8_table)?;
+        let mut result: Vec<Acceptation> = Vec::new();
+        if number_of_entries > 0 {
+            let min_valid_concept_u32 = u32::try_from(min_valid_concept).unwrap();
+            let max_valid_concept_u32 = u32::try_from(max_valid_concept).unwrap();
+            let correlation_array_count_u32 = u32::try_from(correlation_array_count).unwrap();
+
+            // TODO: Improve codification for this table, it include some edge cases that should not be possible, like negative values for lengths
+            let correlation_array_set_length_table = self.stream.read_table(&self.integer8_table, &self.natural8_table, InputBitStream::read_symbol, InputBitStream::read_diff_i32)?;
+            let concept_table = RangedIntegerHuffmanTable::new(min_valid_concept_u32, max_valid_concept_u32);
+            for _ in 0..number_of_entries {
+                let concept = self.stream.read_symbol(&concept_table)?;
+                let length = self.stream.read_symbol(&correlation_array_set_length_table)?;
+                if length <= 0 {
+                    panic!("Unexpected length {}", length);
+                }
+
+                let length_u32 = u32::try_from(length).unwrap();
+                let symbol_table = RangedIntegerHuffmanTable::new(0, correlation_array_count_u32 - length_u32);
+                let mut value = self.stream.read_symbol(&symbol_table)?;
+                result.push(Acceptation {
+                    concept,
+                    correlation_array_index: CorrelationArrayIndex {
+                        index: usize::try_from(value).unwrap()
+                    }
+                });
+
+                for set_entry_index in 1..length_u32 {
+                    let symbol_diff_table = RangedIntegerHuffmanTable::new(value + 1, correlation_array_count_u32 - length_u32 + set_entry_index);
+                    value += self.stream.read_symbol(&symbol_diff_table)? + 1;
+                    result.push(Acceptation {
+                        concept,
+                        correlation_array_index: CorrelationArrayIndex {
+                            index: usize::try_from(value).unwrap()
+                        }
+                    });
+                }
+            }
+        }
+
+        Ok(result)
+    }
+
     pub fn read(mut self) -> Result<SdbReadResult, ReadError> {
         let symbol_array_count = usize::try_from(self.stream.read_symbol(&self.natural8_table)?).unwrap();
         let chars_table = self.stream.read_table(&self.natural8_table, &self.natural4_table, InputBitStream::read_character, InputBitStream::read_diff_character)?;
@@ -274,9 +335,11 @@ impl<'a> SdbReader<'a> {
         }
 
         let conversions = self.read_conversions(alphabet_count, symbol_array_count)?;
-        let max_concept = self.stream.read_symbol(&self.natural8_table)?;
+        let max_concept_u32 = self.stream.read_symbol(&self.natural8_table)?;
+        let max_concept = usize::try_from(max_concept_u32).unwrap();
         let correlations = self.read_correlations(alphabet_count, symbol_array_count)?;
         let correlation_arrays = self.read_correlation_arrays(correlations.len())?;
+        let acceptations = self.read_acceptations(1, max_concept, correlation_arrays.len())?;
 
         Ok(SdbReadResult {
             symbol_arrays,
@@ -285,14 +348,15 @@ impl<'a> SdbReader<'a> {
             max_concept,
             correlations,
             correlation_arrays,
+            acceptations
         })
     }
 }
 
 impl SdbReadResult {
-    pub fn get_complete_correlation(&self, correlation_array_index: usize) -> HashMap<Alphabet, String> {
+    pub fn get_complete_correlation(&self, correlation_array_index: CorrelationArrayIndex) -> HashMap<Alphabet, String> {
         let mut result: HashMap<Alphabet, String> = HashMap::new();
-        let array: &Vec<CorrelationIndex> = &self.correlation_arrays[correlation_array_index];
+        let array: &Vec<CorrelationIndex> = &self.correlation_arrays[correlation_array_index.index];
         let array_length = array.len();
         if array_length == 0 {
             return result;
