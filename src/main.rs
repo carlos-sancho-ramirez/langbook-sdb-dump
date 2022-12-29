@@ -74,7 +74,7 @@ fn main() {
                             println!("Correlation arrays read - {} correlation arrays found", result.correlation_arrays.len());
                             println!("Acceptations read - {} acceptations found", result.acceptations.len());
 
-                            let mut synonyms: HashMap<u32, HashSet<CorrelationArrayIndex>> = HashMap::new();
+                            let mut synonyms: HashMap<usize, HashSet<CorrelationArrayIndex>> = HashMap::new();
                             for acc in result.acceptations.iter() {
                                 match synonyms.get_mut(&acc.concept) {
                                     Some(set) => {

@@ -327,6 +327,68 @@ impl HuffmanTable<u32> for RangedIntegerHuffmanTable {
     }
 }
 
+pub struct RangedNaturalUsizeHuffmanTable {
+    min: usize,
+    max: usize,
+    max_bits: u32,
+    limit: u32
+}
+
+impl RangedNaturalUsizeHuffmanTable {
+    pub fn new(min: usize, max: usize) -> Self {
+        if max < min {
+            panic!("Invalid range");
+        }
+
+        let possibilities = u32::try_from(max - min + 1).unwrap();
+        let mut max_bits = 0;
+        while possibilities > (1 << max_bits) {
+            max_bits += 1;
+        }
+
+        let limit = (1 << max_bits) - possibilities;
+
+        Self {
+            min,
+            max,
+            max_bits,
+            limit
+        }
+    }
+}
+
+impl From<&Range<usize>> for RangedNaturalUsizeHuffmanTable {
+    fn from(range: &Range<usize>) -> Self {
+        RangedNaturalUsizeHuffmanTable::new(range.start, range.end - 1)
+    }
+}
+
+impl HuffmanTable<usize> for RangedNaturalUsizeHuffmanTable {
+    fn symbols_with_bits(&self, bits: u32) -> u32 {
+        if bits == self.max_bits {
+            u32::try_from(self.max - self.min).unwrap() + 1 - self.limit
+        }
+        else if bits == self.max_bits - 1 {
+            self.limit
+        }
+        else {
+            0
+        }
+    }
+
+    fn get_symbol(&self, bits: u32, index: u32) -> Result<usize, &str> {
+        if bits == self.max_bits {
+            Ok(usize::try_from(index + self.limit).unwrap() + self.min)
+        }
+        else if bits == self.max_bits - 1 {
+            Ok(usize::try_from(index).unwrap() + self.min)
+        }
+        else {
+            Err("Invalid number of bits")
+        }
+    }
+}
+
 pub struct DefinedHuffmanTable<S> {
     level_indexes: Vec<usize>,
     symbols: Vec<S>
