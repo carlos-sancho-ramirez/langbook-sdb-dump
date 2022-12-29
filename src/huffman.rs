@@ -169,6 +169,45 @@ impl HuffmanTable<u32> for NaturalNumberHuffmanTable {
     }
 }
 
+pub struct NaturalUsizeHuffmanTable {
+    alignment: u32
+}
+
+impl NaturalUsizeHuffmanTable {
+    pub fn create_with_alignment(alignment: u32) -> Self {
+        NaturalUsizeHuffmanTable {
+            alignment
+        }
+    }
+}
+
+impl HuffmanTable<usize> for NaturalUsizeHuffmanTable {
+    fn symbols_with_bits(&self, bits: u32) -> u32 {
+        if bits > 0 && bits % self.alignment == 0 {
+            1 << ((bits / self.alignment) * (self.alignment - 1))
+        }
+        else {
+            0
+        }
+    }
+
+    fn get_symbol(&self, bits: u32, index: u32) -> Result<usize, &str> {
+        if bits == 0 || bits % self.alignment != 0 {
+            Err("Invalid symbol")
+        }
+        else {
+            let mut base = 0usize;
+            let mut exp = (bits - 1) / self.alignment;
+            while exp > 0 {
+                base += 1 << (exp * (self.alignment - 1));
+                exp -= 1;
+            }
+
+            Ok(base + usize::try_from(index).unwrap())
+        }
+    }
+}
+
 pub struct IntegerNumberHuffmanTable {
     alignment: u32
 }

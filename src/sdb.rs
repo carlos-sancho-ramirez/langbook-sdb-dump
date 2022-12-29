@@ -2,7 +2,7 @@ use std::collections::HashMap;
 use std::fmt::{Display, Formatter, Write};
 use std::hash::{Hash, Hasher};
 use crate::file_utils::ReadError;
-use crate::huffman::{HuffmanTable, InputBitStream, IntegerNumberHuffmanTable, NaturalNumberHuffmanTable, RangedIntegerHuffmanTable};
+use crate::huffman::{HuffmanTable, InputBitStream, IntegerNumberHuffmanTable, NaturalNumberHuffmanTable, NaturalUsizeHuffmanTable, RangedIntegerHuffmanTable};
 
 struct LanguageCode {
     code: u16
@@ -88,7 +88,8 @@ pub struct SdbReader<'a> {
     natural3_table: NaturalNumberHuffmanTable,
     natural4_table: NaturalNumberHuffmanTable,
     natural8_table: NaturalNumberHuffmanTable,
-    integer8_table: IntegerNumberHuffmanTable
+    integer8_table: IntegerNumberHuffmanTable,
+    natural8_usize_table: NaturalUsizeHuffmanTable,
 }
 
 pub struct SdbReadResult {
@@ -109,7 +110,8 @@ impl<'a> SdbReader<'a> {
             natural3_table: NaturalNumberHuffmanTable::create_with_alignment(3),
             natural4_table: NaturalNumberHuffmanTable::create_with_alignment(4),
             natural8_table: NaturalNumberHuffmanTable::create_with_alignment(8),
-            integer8_table: IntegerNumberHuffmanTable::create_with_alignment(8)
+            integer8_table: IntegerNumberHuffmanTable::create_with_alignment(8),
+            natural8_usize_table: NaturalUsizeHuffmanTable::create_with_alignment(8)
         }
     }
 
@@ -128,11 +130,11 @@ impl<'a> SdbReader<'a> {
     }
 
     fn read_languages(&mut self) -> Result<Vec<Language>, ReadError> {
-        let language_count = self.stream.read_symbol(&self.natural8_table)?;
+        let language_count = self.stream.read_symbol(&self.natural8_usize_table)?;
 
         let last_valid_lang_code = 26 * 26 - 1;
         let mut first_valid_lang_code = 0;
-        let mut languages: Vec<Language> = Vec::with_capacity(usize::try_from(language_count).unwrap());
+        let mut languages: Vec<Language> = Vec::with_capacity(language_count);
         for _ in 0..language_count {
             let table = RangedIntegerHuffmanTable::new(first_valid_lang_code, last_valid_lang_code);
             let raw_lang_code = self.stream.read_symbol(&table)?;
@@ -151,12 +153,12 @@ impl<'a> SdbReader<'a> {
     }
 
     fn read_conversions(&mut self, alphabet_count: usize, symbol_array_count: usize) -> Result<Vec<Conversion>, ReadError> {
-        let number_of_conversions = self.stream.read_symbol(&self.natural8_table)?;
+        let number_of_conversions = self.stream.read_symbol(&self.natural8_usize_table)?;
         let symbol_array_table = RangedIntegerHuffmanTable::new(0, u32::try_from(symbol_array_count - 1).unwrap());
         let max_valid_alphabet = alphabet_count - 1;
         let mut min_source_alphabet = 0;
         let mut min_target_alphabet = 0;
-        let mut conversions: Vec<Conversion> = Vec::with_capacity(usize::try_from(number_of_conversions).unwrap());
+        let mut conversions: Vec<Conversion> = Vec::with_capacity(number_of_conversions);
         for _ in 0..number_of_conversions {
             let source_alphabet_table = RangedIntegerHuffmanTable::new(min_source_alphabet, u32::try_from(max_valid_alphabet).unwrap());
             let raw_source_alphabet = self.stream.read_symbol(&source_alphabet_table)?;
@@ -177,8 +179,8 @@ impl<'a> SdbReader<'a> {
 
             min_target_alphabet = raw_target_alphabet + 1;
 
-            let pair_count = self.stream.read_symbol(&self.natural8_table)?;
-            let mut pairs: Vec<(SymbolArrayIndex, SymbolArrayIndex)> = Vec::with_capacity(usize::try_from(pair_count).unwrap());
+            let pair_count = self.stream.read_symbol(&self.natural8_usize_table)?;
+            let mut pairs: Vec<(SymbolArrayIndex, SymbolArrayIndex)> = Vec::with_capacity(pair_count);
             for _ in 0..pair_count {
                 let source = SymbolArrayIndex {
                     index: usize::try_from(self.stream.read_symbol(&symbol_array_table)?).unwrap()
@@ -201,10 +203,10 @@ impl<'a> SdbReader<'a> {
     }
 
     fn read_correlations(&mut self, alphabet_count: usize, symbol_array_count: usize) -> Result<Vec<HashMap<Alphabet, SymbolArrayIndex>>, ReadError> {
-        let number_of_correlations = self.stream.read_symbol(&self.natural8_table)?;
+        let number_of_correlations = self.stream.read_symbol(&self.natural8_usize_table)?;
         let alphabet_count_u32 = u32::try_from(alphabet_count).unwrap();
         let symbol_array_count_u32 = u32::try_from(symbol_array_count).unwrap();
-        let mut correlations: Vec<HashMap<Alphabet, SymbolArrayIndex>> = Vec::with_capacity(usize::try_from(number_of_correlations).unwrap());
+        let mut correlations: Vec<HashMap<Alphabet, SymbolArrayIndex>> = Vec::with_capacity(number_of_correlations);
         if number_of_correlations > 0 {
             // The serialization of correlations can be improved in several ways:
             // - There can be only one correlation with length 0. It could be serialised with a single bit: 0 (not present), 1 (present at the beginning)
@@ -252,8 +254,8 @@ impl<'a> SdbReader<'a> {
     }
 
     fn read_correlation_arrays(&mut self, number_of_correlations: usize) -> Result<Vec<Vec<CorrelationIndex>>, ReadError> {
-        let number_of_arrays = self.stream.read_symbol(&self.natural8_table)?;
-        let mut arrays: Vec<Vec<CorrelationIndex>> = Vec::with_capacity(usize::try_from(number_of_arrays).unwrap());
+        let number_of_arrays = self.stream.read_symbol(&self.natural8_usize_table)?;
+        let mut arrays: Vec<Vec<CorrelationIndex>> = Vec::with_capacity(number_of_arrays);
         if number_of_arrays > 0 {
             let correlation_table = RangedIntegerHuffmanTable::new(0, u32::try_from(number_of_correlations).unwrap() - 1);
             // TODO: Improve codification for this table, it include lot of edge cases that should not be possible
@@ -275,7 +277,7 @@ impl<'a> SdbReader<'a> {
     }
 
     fn read_acceptations(&mut self, min_valid_concept: usize, max_valid_concept: usize, correlation_array_count: usize) -> Result<Vec<Acceptation>, ReadError> {
-        let number_of_entries = self.stream.read_symbol(&self.natural8_table)?;
+        let number_of_entries = self.stream.read_symbol(&self.natural8_usize_table)?;
         let mut result: Vec<Acceptation> = Vec::new();
         if number_of_entries > 0 {
             let min_valid_concept_u32 = u32::try_from(min_valid_concept).unwrap();
@@ -319,7 +321,7 @@ impl<'a> SdbReader<'a> {
     }
 
     pub fn read(mut self) -> Result<SdbReadResult, ReadError> {
-        let symbol_array_count = usize::try_from(self.stream.read_symbol(&self.natural8_table)?).unwrap();
+        let symbol_array_count = self.stream.read_symbol(&self.natural8_usize_table)?;
         let chars_table = self.stream.read_table(&self.natural8_table, &self.natural4_table, InputBitStream::read_character, InputBitStream::read_diff_character)?;
         let symbol_arrays_length_table = self.stream.read_table(&self.natural8_table, &self.natural3_table, InputBitStream::read_symbol, InputBitStream::read_diff_u32)?;
         let symbol_arrays = self.read_symbol_arrays(symbol_array_count, symbol_arrays_length_table, chars_table)?;
@@ -335,8 +337,7 @@ impl<'a> SdbReader<'a> {
         }
 
         let conversions = self.read_conversions(alphabet_count, symbol_array_count)?;
-        let max_concept_u32 = self.stream.read_symbol(&self.natural8_table)?;
-        let max_concept = usize::try_from(max_concept_u32).unwrap();
+        let max_concept = self.stream.read_symbol(&self.natural8_usize_table)?;
         let correlations = self.read_correlations(alphabet_count, symbol_array_count)?;
         let correlation_arrays = self.read_correlation_arrays(correlations.len())?;
         let acceptations = self.read_acceptations(1, max_concept, correlation_arrays.len())?;
