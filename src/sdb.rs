@@ -1,4 +1,4 @@
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::fmt::{Display, Formatter, Write};
 use std::hash::{Hash, Hasher};
 use crate::file_utils::ReadError;
@@ -82,6 +82,11 @@ pub struct Acceptation {
     pub correlation_array_index: CorrelationArrayIndex
 }
 
+pub struct Definition {
+    pub base_concept: usize,
+    pub complements: HashSet<usize>
+}
+
 pub struct SdbReader<'a> {
     stream: InputBitStream<'a>,
     natural3_table: NaturalNumberHuffmanTable,
@@ -99,7 +104,8 @@ pub struct SdbReadResult {
     pub max_concept: usize,
     pub correlations: Vec<HashMap<Alphabet, SymbolArrayIndex>>,
     pub correlation_arrays: Vec<Vec<CorrelationIndex>>,
-    pub acceptations: Vec<Acceptation>
+    pub acceptations: Vec<Acceptation>,
+    pub definitions: HashMap<usize, Definition>
 }
 
 impl<'a> SdbReader<'a> {
@@ -308,6 +314,56 @@ impl<'a> SdbReader<'a> {
         Ok(result)
     }
 
+    fn read_definitions(&mut self, min_valid_concept: usize, max_valid_concept: usize) -> Result<HashMap<usize, Definition>, ReadError> {
+        let number_of_base_concepts = self.stream.read_symbol(&self.natural8_usize_table)?;
+        let mut definitions: HashMap<usize, Definition> = HashMap::new();
+        if number_of_base_concepts > 0 {
+            let concept_map_length_table = self.stream.read_table(&self.natural8_table, &self.natural8_table, InputBitStream::read_symbol, InputBitStream::read_diff_u32)?;
+            let mut min_base_concept = min_valid_concept;
+            for max_base_concept in (max_valid_concept - number_of_base_concepts + 1)..=max_valid_concept {
+                let table = RangedNaturalUsizeHuffmanTable::new(min_base_concept, max_base_concept);
+                let base = self.stream.read_symbol(&table)?;
+                min_base_concept = base + 1;
+
+                let map_length = usize::try_from(self.stream.read_symbol(&concept_map_length_table)?).unwrap();
+                if map_length > 0 {
+                    let concept_table = RangedNaturalUsizeHuffmanTable::new(min_valid_concept, max_valid_concept - map_length + 1);
+                    let mut concept = self.stream.read_symbol(&concept_table)?;
+
+                    fn read_complements(stream: &mut InputBitStream, min_valid_concept: usize, max_valid_concept: usize) -> Result<HashSet<usize>, ReadError> {
+                        let mut min_valid_complement = min_valid_concept;
+                        let mut complements: HashSet<usize> = HashSet::new();
+                        while min_valid_complement < max_valid_concept && stream.read_boolean()? {
+                            let complement_table = RangedNaturalUsizeHuffmanTable::new(min_valid_complement, max_valid_concept);
+                            let complement = stream.read_symbol(&complement_table)?;
+                            min_valid_complement = complement + 1;
+                            complements.insert(complement);
+                        }
+
+                        Ok(complements)
+                    }
+
+                    definitions.insert(concept, Definition {
+                        base_concept: base,
+                        complements: read_complements(&mut self.stream, min_valid_concept, max_valid_concept)?
+                    });
+
+                    for map_index in 1..map_length {
+                        let concept_table = RangedNaturalUsizeHuffmanTable::new(concept + 1, max_valid_concept - map_length + 1 + map_index);
+                        concept = self.stream.read_symbol(&concept_table)?;
+
+                        definitions.insert(concept, Definition {
+                            base_concept: base,
+                            complements: read_complements(&mut self.stream, min_valid_concept, max_valid_concept)?
+                        });
+                    }
+                }
+            }
+        }
+
+        Ok(definitions)
+    }
+
     pub fn read(mut self) -> Result<SdbReadResult, ReadError> {
         let symbol_array_count = self.stream.read_symbol(&self.natural8_usize_table)?;
         let chars_table = self.stream.read_table(&self.natural8_table, &self.natural4_table, InputBitStream::read_character, InputBitStream::read_diff_character)?;
@@ -329,6 +385,7 @@ impl<'a> SdbReader<'a> {
         let correlations = self.read_correlations(alphabet_count, symbol_array_count)?;
         let correlation_arrays = self.read_correlation_arrays(correlations.len())?;
         let acceptations = self.read_acceptations(1, max_concept, correlation_arrays.len())?;
+        let definitions = self.read_definitions(1, max_concept)?;
 
         Ok(SdbReadResult {
             symbol_arrays,
@@ -337,7 +394,8 @@ impl<'a> SdbReader<'a> {
             max_concept,
             correlations,
             correlation_arrays,
-            acceptations
+            acceptations,
+            definitions
         })
     }
 }

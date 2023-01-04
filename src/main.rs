@@ -3,7 +3,7 @@ use std::env;
 use std::fs::File;
 use std::io::Read;
 use huffman::InputBitStream;
-use crate::sdb::{CorrelationArrayIndex, SdbReader};
+use crate::sdb::{CorrelationArrayIndex, SdbReader, SdbReadResult};
 
 pub mod file_utils;
 pub mod huffman;
@@ -73,38 +73,34 @@ fn main() {
                             println!("Correlations read - {} correlations found", result.correlations.len());
                             println!("Correlation arrays read - {} correlation arrays found", result.correlation_arrays.len());
                             println!("Acceptations read - {} acceptations found", result.acceptations.len());
+                            println!("Definitions read - {} definitions found", result.definitions.len());
 
-                            let mut synonyms: HashMap<usize, HashSet<CorrelationArrayIndex>> = HashMap::new();
-                            for acc in result.acceptations.iter() {
-                                match synonyms.get_mut(&acc.concept) {
-                                    Some(set) => {
-                                        set.insert(acc.correlation_array_index);
-                                    },
-                                    None => {
-                                        let mut new_set: HashSet<CorrelationArrayIndex> = HashSet::new();
-                                        new_set.insert(acc.correlation_array_index);
-                                        synonyms.insert(acc.concept, new_set);
+                            fn concept_to_string(result: &SdbReadResult, concept: usize) -> String {
+                                for acc in result.acceptations.iter() {
+                                    if acc.concept == concept {
+                                        return result.get_complete_correlation(acc.correlation_array_index).into_values().reduce(|a, b| {
+                                            let mut c = String::new();
+                                            c.push_str(&a);
+                                            c.push('/');
+                                            c.push_str(&b);
+                                            c
+                                        }).unwrap()
                                     }
                                 }
+
+                                panic!("No suitable string found for concept {}", concept);
                             }
 
-                            for set in synonyms.into_values() {
-                                let text = set.into_iter().map(|correlation_array_index| {
-                                    result.get_complete_correlation(correlation_array_index).into_values().reduce(|a, b| {
-                                        let mut c = String::new();
-                                        c.push_str(&a);
-                                        c.push('/');
-                                        c.push_str(&b);
-                                        c
-                                    }).unwrap()
-                                })
-                                .reduce(|a, b| {
-                                    let mut c = String::new();
-                                    c.push_str(&a);
-                                    c.push_str(" <--> ");
-                                    c.push_str(&b);
-                                    c
-                                }).unwrap();
+                            for (concept, definition) in result.definitions.iter() {
+                                let mut text = String::new();
+                                text.push_str(&concept_to_string(&result, *concept));
+                                text.push_str(": ");
+                                text.push_str(&concept_to_string(&result, definition.base_concept));
+                                for complement in definition.complements.iter() {
+                                    text.push_str(" + ");
+                                    text.push_str(&concept_to_string(&result, *complement));
+                                }
+
                                 println!("  {}", text);
                             }
                         },

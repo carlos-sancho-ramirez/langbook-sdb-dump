@@ -12,7 +12,7 @@ pub struct InputBitStream<'a> {
 }
 
 impl<'a> InputBitStream<'a> {
-    fn read_boolean(&mut self) -> Result<bool, ReadError> {
+    pub fn read_boolean(&mut self) -> Result<bool, ReadError> {
         if self.remaining == 0 {
             self.buffer = file_utils::read_u8(self.bytes)?;
             self.remaining = 8;
